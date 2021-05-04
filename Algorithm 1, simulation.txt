@@ -1,0 +1,91 @@
+# =============================================================================
+# Simulation experiment for Algorithm 1
+#
+# paper: 'Resampling Methods for Detecting Anisotropic Correlation Structure'.
+# Software: Python 3.7.0
+# Date: 29Apr2021
+# =============================================================================
+
+import numpy as np
+from sklearn import gaussian_process
+from sklearn.gaussian_process.kernels import Matern, WhiteKernel, ConstantKernel
+
+np.seterr(divide='ignore', invalid='ignore')
+
+### Paramters
+
+n=np.int(500)   # sample size. In the paper we present n=200/500/1000  
+
+lambda1=1
+lambda2=10    # lambda2=1 is the isotropic setting. In the paper we present lambda_2=1/2/5/10 
+noise=1
+signal=1
+eta=0         # eta_1 in the simulated data. Here, eta_2 is assumed to be eta_1+pi/2 
+
+B=200
+
+### Functions
+
+def Kernel(s1,signal,eta,lambda1,lambda2):
+    rotCos=np.cos(eta)
+    rotSin=np.sin(eta)
+    rotation=np.array([[rotCos,rotSin],[-rotSin,rotCos]])
+    scaling=np.array([[lambda1**2,0],[0,lambda2**2]])
+
+    cov=[]
+    for col in range(len(s1)):
+        s=np.column_stack((s1[:,0]-s1[col,0],s1[:,1]-s1[col,1]))
+        cov.append(signal*np.exp(-np.sqrt(np.diag(s@np.linalg.inv(rotation@scaling@rotation.T)@s.T))))
+    cov=np.array(cov) 
+    return(cov)
+
+def AssumedKernel(s1,theta1,theta2):
+    cov=[]
+    for col in range(len(s1)):
+        s=np.column_stack((s1[:,0].copy()-s1[col,0].copy(),s1[:,1].copy()-s1[col,1].copy()))
+        cov.append(theta1*np.exp(-np.sqrt(np.diag(s@s.T))/theta2)) # The theta2 should be outside the sqrt: https://stats.stackexchange.com/questions/322523/what-is-the-rationale-of-the-mat%C3%A9rn-covariance-function
+    cov=np.array(cov) 
+    return(cov)
+
+def RunningGP(version,s,z):
+    if version=='aniso':
+        var_anisotropy = ConstantKernel(constant_value=0.5,constant_value_bounds=(0.1,20))*Matern(length_scale=[0.5,0.5],nu=0.5,length_scale_bounds=(0.1,20)) + WhiteKernel(noise_level=1)
+        gp_anisotropy = gaussian_process.GaussianProcessRegressor(kernel=var_anisotropy,normalize_y=False,n_restarts_optimizer=10).fit(s, z)
+        return(gp_anisotropy.log_marginal_likelihood_value_,np.exp(gp_anisotropy.kernel_.theta))
+    elif version=='iso':
+        var_isotropy = ConstantKernel(constant_value=0.5,constant_value_bounds=(0.1,20))*Matern(length_scale=0.5,nu=0.5,length_scale_bounds=(0.1,20)) + WhiteKernel(noise_level=1)
+        gp_isotropy = gaussian_process.GaussianProcessRegressor(kernel=var_isotropy,normalize_y=False,n_restarts_optimizer=10).fit(s, z)
+        return(gp_isotropy.log_marginal_likelihood_value_,np.exp(gp_isotropy.kernel_.theta))
+
+
+### Sampling
+
+s=np.column_stack((np.random.uniform(0,1,n),np.random.uniform(0,1,n)))
+k_true=Kernel(s,signal,eta,lambda1,lambda2)
+var_true=k_true+noise*np.eye(len(s))
+z=np.random.multivariate_normal(np.zeros(len(s)), var_true, 1).T
+
+### Error - samples
+
+ll_aniso,theta_aniso=RunningGP('aniso',s,z)
+ll_iso,theta_iso=RunningGP('iso',s,z)
+
+phi=(-ll_aniso)-(-ll_iso)     # phi
+
+### Error - bootstrap samples
+
+var_bootstrap=AssumedKernel(s,theta_iso[0],theta_iso[1])+theta_iso[2]*np.eye(len(s))
+
+phi_b=[]
+for i in range(B):
+    z_tmp=np.random.multivariate_normal(np.zeros(len(s)), var_bootstrap, 1).T
+    ll_b_aniso,theta_b_aniso=RunningGP('aniso',s,z_tmp)
+    ll_b_iso,theta_b_iso=RunningGP('iso',s,z_tmp)
+    
+    phi_b.append((-ll_b_aniso)-(-ll_b_iso))
+    
+## Summarizing the results
+
+PV=sum(phi_b<phi)/B
+
+

@@ -1,0 +1,99 @@
+# =============================================================================
+# =============================================================================
+# Real data analysist for Algorithm 2
+#
+# paper: 'Resampling Methods for Detecting Anisotropic Correlation Structure'.
+# Softwere: Python 3.7.0
+# Date: 29Apr2021
+# =============================================================================
+
+import numpy as np
+import pandas as pd
+from scipy.optimize import minimize
+
+
+### Import
+
+data_path="add your file's'path"
+df=pd.read_csv(data_path, sep=",", header=0)
+df=df.dropna()
+
+### Test parameters
+
+B=200
+alpha=np.pi/36
+SubSample=10000
+direction=0         #suspected diraction anisotropic axis.
+
+
+### functions
+
+def isotropy(par,y,H):
+    signal=par[0]
+    lambda12=par[1]
+    
+    dist=np.diag(H@H.T/lambda12)
+    K=signal*np.exp(-np.sqrt(dist)) 
+    Sqerror=(y-K).T@(y-K)/len(y)  
+    return(Sqerror)  
+
+def anisotropy(par,y,H,direction):
+    rotCos=np.cos(direction)
+    rotSin=np.sin(direction)
+    rotation=np.array([[rotCos,rotSin],[-rotSin,rotCos]])
+
+    signal=par[0]
+    lambda1=par[1]
+    lambda2=par[2]
+    scaling=np.diag([1/lambda1,1/lambda2])
+    A=rotation@scaling@rotation.T
+    dist=np.diag(H@A@H.T)
+    K=signal*np.exp(-np.sqrt(dist))
+    Sqerror=(y-K).T@(y-K)/len(y)  
+    return(Sqerror)  
+
+### Scaling
+
+s_pre_scaled=np.array([df.iloc[:,0]-np.min(df.iloc[:,0]),df.iloc[:,1]-np.min(df.iloc[:,1])]).T
+s=s_pre_scaled/np.max(np.sqrt(np.diagonal(s_pre_scaled@s_pre_scaled.T)))
+
+z=(df.iloc[:,2]-np.mean(df.iloc[:,2])).reset_index(drop=True)/np.std(df.iloc[:,2])   # use log transforamtion, np.log(df.iloc[:,2]), for Barbour data
+
+### Creating y and H
+H=[]
+y=[]
+for i in range(0,len(z)):
+    for j in range(i,len(z)):
+        H.append(s[i,:]-s[j,:])
+        y.append(z[i]*z[j])
+H=np.array(H)
+y=np.array(y).ravel()
+
+
+### statistic - sample
+
+sample_index=np.random.choice(range(len(y)), size=SubSample, replace=False)
+phi_iso=minimize(isotropy,[1,1],args = (y[sample_index],H[sample_index,:]),method='L-BFGS-B',bounds=((0.0001,20),(0.0001,20)),options={'maxiter':50})['fun']
+phi_aniso=minimize(anisotropy,[1,1,1],args = (y[sample_index],H[sample_index,:],direction),method='L-BFGS-B',bounds=((0.0001,20),(0.0001,20),(0.0001,20)),options={'maxiter':50})['fun']
+
+phi=np.array(phi_iso-phi_aniso)
+
+### statistics - bootstrap
+
+phi_aniso_b=[]
+for i in range(B):
+    direction_b=np.random.uniform(direction+alpha,direction+np.pi/2-alpha)
+    phi_aniso_b.append(minimize(anisotropy,[1,1,1],args = (y[sample_index],H[sample_index,:],direction_b),method='L-BFGS-B',
+                       bounds=((0.0001,100),(0.0001,100),(0.0001,100)),
+                       options={'maxiter':50})['fun'])
+
+
+phi_aniso_b=np.array(phi_aniso_b)
+phi_b=phi_iso-phi_aniso_b
+
+### Summarizing the results
+PV=sum(phi<phi_b)/B
+
+
+
+

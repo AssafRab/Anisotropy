@@ -1,0 +1,100 @@
+# =============================================================================
+# =============================================================================
+# real data analysis for Algorithm 1
+#
+# paper: 'Resampling Methods for Detecting Anisotropic Correlation Structure'.
+# Softwere: Python 3.7.0
+# Date: 29Apr2021
+# =============================================================================
+import numpy as np
+import pandas as pd
+from scipy.optimize import minimize
+import scipy.linalg as spla  
+
+
+### Import
+
+data_path="add your file's'path"
+df=pd.read_csv(data_path, sep=",", header=0)
+df=df.dropna()
+
+
+B=200
+
+### functions
+
+def isotropy(par,z,s):
+    signal=par[0]
+    lambda12=par[1]
+    sigsq=par[2]
+    cov=[]
+    for col in range(len(s)):
+        s_tmp=np.column_stack((s[:,0]-s[col,0],s[:,1]-s[col,1]))
+        cov.append(signal*np.exp(-np.sqrt(np.diag(s_tmp@s_tmp.T)/lambda12)))
+    cov=np.array(cov) +(sigsq**2)*np.eye(len(s))    
+    cov_root= spla.cholesky(cov,lower=True)
+    return(np.sum(np.log(np.diagonal(cov_root)))+0.5*z.T.dot(spla.cho_solve((cov_root,True),z)) +0.5 * len(z) * np.log(2*np.pi))
+
+def anisotropy(par,z,s):
+    signal=par[0]
+    lambda1=par[1]
+    lambda2=par[2]
+    eta=par[3]
+    sigsq=par[4]
+    rotation=np.array([[np.cos(eta),-np.sin(eta)],[np.cos(eta),np.sin(eta)]])
+    scaling=np.diag(np.array([1/lambda1,1/lambda2]))
+    A=rotation.T@scaling@rotation
+    cov=[]
+    for col in range(len(s)):
+        s=np.column_stack((s[:,0]-s[col,0],s[:,1]-s[col,1]))
+        cov.append(signal*np.exp(-np.sqrt(np.diag(s@A@s.T))))
+    cov=np.array(cov) +(sigsq**2)*np.eye(len(s))    
+    cov_root= spla.cholesky(cov,lower=True)
+    return(np.sum(np.log(np.diagonal(cov_root)))+0.5*z.T.dot(spla.cho_solve((cov_root,True),z))+0.5 * len(z) * np.log(2*np.pi))
+
+def AssumedKernel(s,par):
+    signal=par[0]
+    lambda12=par[1]
+    sigsq=par[2]
+    cov=[]
+    for col in range(len(s)):
+        s_tmp=np.column_stack((s[:,0]-s[col,0],s[:,1]-s[col,1]))
+        cov.append(signal*np.exp(-np.sqrt(np.diag(s_tmp@s_tmp.T)/lambda12)))
+    cov=np.array(cov) +(sigsq**2)*np.eye(len(s))
+    return(cov)
+
+
+###  scaling
+s_pre_scaled=np.array([df.iloc[:,0]-np.min(df.iloc[:,0]),df.iloc[:,1]-np.min(df.iloc[:,1])]).T
+s=s_pre_scaled/np.max(np.sqrt(np.diagonal(s_pre_scaled@s_pre_scaled.T)))
+
+z=(df.iloc[:,2]-np.mean(df.iloc[:,2])).reset_index(drop=True).values/np.std(df.iloc[:,2])  # use log transforamtion, np.log(df.iloc[:,2]), for Barbour data
+
+### smaple statistic
+isotropy_results=minimize(isotropy,[1,1,1],args = (z,s),method='L-BFGS-B',bounds=((0.0001,100),(0.0001,100),(0.0001,100)),options={'maxiter':50})
+anisotropy_results=minimize(anisotropy,[1,1,1,1,1],args = (z,s),method='L-BFGS-B',bounds=((0.0001,100),(0.0001,100),(0.0001,100),(0.0001,100),(0.0001,100)),options={'maxiter':50})
+
+phi=isotropy_results['fun']-anisotropy_results['fun']
+
+## Bootstraps statiustics
+
+# setting
+par_isotropy=isotropy_results['x']
+var_bootstrap=AssumedKernel(s,par_isotropy)
+
+# statistics
+isotropy_results_b=[]
+anisotropy_results_b=[]
+
+for i in range(B):
+    z_tmp=np.random.multivariate_normal(np.zeros(len(s)), var_bootstrap, 1).T
+    
+    isotropy_results_b.append(minimize(isotropy,[1,1,1],args = (z_tmp,s),method='L-BFGS-B',bounds=((0.0001,20),(0.0001,20),(0.0001,20)),options={'maxiter':50})['fun'])
+    anisotropy_results_b.append(minimize(anisotropy,[1,1,1,1,1],args = (z_tmp,s),method='L-BFGS-B',bounds=((0.0001,20),(0.0001,20),(0.0001,20),(0.0001,20),(0.0001,20)),options={'maxiter':50})['fun'])
+
+phi_b_dist=np.array(isotropy_results_b)-np.array(anisotropy_results_b)
+
+PV=sum(phi<phi_b_dist)/B
+
+
+

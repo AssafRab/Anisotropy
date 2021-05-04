@@ -1,0 +1,113 @@
+# =============================================================================
+# =============================================================================
+# Simulation experiment for Algorithm 2
+#
+# paper: 'Resampling Methods for Detecting Anisotropic Correlation Structure'.
+# Softwere: Python 3.7.0
+# Date: 29Apr2021
+# =============================================================================
+
+import numpy as np
+from scipy.optimize import minimize
+
+### Paramters
+
+n=np.int(500)   # sample size. In the paper we present n=200/500/1000  
+
+lambda1=1
+lambda2=10    # lambda2=1 is the isotropic setting. In the paper we present lambda_2=1/2/5/10 
+noise=1
+signal=1
+eta=0         # eta_1 in the simulated data. Here, eta_2 is assumed to be eta_1+pi/2 
+direction=0   # eta_1 under the anisotropic hypothesis.
+
+B=200
+alpha=np.pi/36
+Subsample=10000 # In order to reduce computational time we smaple from {u,H}
+
+### Functions
+
+def Kernel(s1,signal,eta,lambda1,lambda2):
+    rotCos=np.cos(eta)
+    rotSin=np.sin(eta)
+    rotation=np.array([[rotCos,rotSin],[-rotSin,rotCos]])
+    scaling=np.array([[1/lambda1**2,0],[0,1/lambda2**2]])
+    A=rotation@scaling@rotation.T
+    cov=[]
+    for col in range(len(s1)):
+        s=np.column_stack((s1[:,0]-s1[col,0],s1[:,1]-s1[col,1]))
+        cov.append(signal*np.exp(-np.sqrt(np.diag(s@A@s.T))))
+    cov=np.array(cov) 
+    return(cov)
+
+
+def loss(par,y,H,direction,Iso):
+    eta=direction
+    signal=par[0]
+  #  SigSq=par[1]
+    if Iso==True:
+        lambda1=lambda2=par[1]
+    else:
+        lambda1=par[1]
+        lambda2=par[2]
+    
+    rotCos=np.cos(eta)
+    rotSin=np.sin(eta)
+    rotation=np.array([[rotCos,rotSin],[-rotSin,rotCos]])
+    scaling=np.array([[1/lambda1**2,0],[0,1/lambda2**2]])
+    A=rotation@scaling@rotation.T
+    dist=np.diag(H@A@H.T)
+    K=signal*np.exp(-np.sqrt(dist))
+      
+    Sqerror=(y-K).T@(y-K)/len(y)  
+    return(Sqerror)  
+
+### Simulting data 
+
+s=np.column_stack((np.random.uniform(0,1,n),np.random.uniform(0,1,n)))
+k_true=Kernel(s,signal,eta,lambda1,lambda2)
+var_true=k_true+noise*np.eye(len(s))
+z=np.random.multivariate_normal(np.zeros(len(s)), var_true, 1).T
+
+H=[]
+y=[]
+for i in range(0,len(z)):
+    for j in range(i,len(z)):
+        H.append(s[i,:]-s[j,:])
+        y.append(z[i]*z[j])
+H=np.array(H)
+y=np.array(y).ravel()
+
+
+### Error - sample
+
+sample_index=np.random.choice(range(len(y)), size=Subsample, replace=False)
+phi_iso=minimize(loss,[1,1,1],args = (y[sample_index],H[sample_index,:],0,True),method='L-BFGS-B',
+                 bounds=((0.001,100),(0.001,100),(0.001,100)),
+                 options={'maxiter':50})['fun']
+
+phi_aniso=minimize(loss,[1,1,1],args = (y[sample_index],H[sample_index,:],direction,False),method='L-BFGS-B',
+                   bounds=((0.001,100),(0.001,100),(0.001,100)),
+                   options={'maxiter':50})['fun']
+
+phi=np.array(phi_iso-phi_aniso)
+
+
+### Error - resamples
+
+phi_aniso_b=[]
+for i in range(B):
+    direction_b=np.random.uniform(alpha,np.pi/2-alpha)     # sampling eta_(b) 
+    phi_aniso_b.append(minimize(loss,[1,1,1],args = (y[sample_index],H[sample_index,:],direction_b,False),method='L-BFGS-B',
+                   bounds=((0.001,100),(0.001,100),(0.001,100)),
+                   options={'maxiter':50})['fun'])
+
+phi_aniso_b=np.array(phi_aniso_b)
+phi_b=phi_iso-phi_aniso_b
+
+### Summarizing the results
+
+PV=sum(phi<phi_b)/B
+
+
+
